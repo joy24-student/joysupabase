@@ -1,0 +1,61 @@
+name: Build Custom Supabase Studio
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h
+
+      - name: Checkout Overlay Repository
+        uses: actions/checkout@v4
+
+      - name: Fetch Base Supabase Monorepo & Apply Custom Overlay
+        run: |
+          mkdir -p supabase-src
+          cd supabase-src
+          git init
+          git remote add origin https://github.com/supabase/supabase.git
+          git fetch --depth 1 origin b5ada9631df0a42cdb6e402eaf0ca18ff52aed80
+          git checkout FETCH_HEAD
+          tar -xzf ../custom-overlay.tar.gz
+          chmod +x apps/studio/docker-entrypoint.sh || true
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Production Docker Image
+        run: |
+          cd supabase-src
+          DOCKER_BUILDKIT=1 docker build \
+            -f apps/studio/Dockerfile \
+            --target production \
+            -t custom-studio:latest \
+            -t ghcr.io/joy24-student/joysupabase/custom-studio:latest \
+            .
+
+      - name: Push to GHCR & Publish Release Tarball
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          docker push ghcr.io/joy24-student/joysupabase/custom-studio:latest || true
+          docker save custom-studio:latest | gzip -1 > custom-studio.tar.gz
+          ls -lh custom-studio.tar.gz
+          gh release delete v1.0.0 --yes --cleanup-tag || true
+          gh release create v1.0.0 custom-studio.tar.gz --title "Custom Studio Build" --notes "Prebuilt custom-studio:latest image"
